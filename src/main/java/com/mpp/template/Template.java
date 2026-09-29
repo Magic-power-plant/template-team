@@ -1,4 +1,4 @@
-package com.pingsu.template;
+package com.mpp.template;
 
 import net.minecraftforge.fml.common.Mod;
 
