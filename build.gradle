@@ -1,150 +1,63 @@
-buildscript {
-    repositories {
-        maven { url = 'https://maven.minecraftforge.net/' }
-        mavenCentral()
-    }
-    dependencies {
-        classpath 'net.minecraftforge.gradle:ForgeGradle:3.+'
-    }
-}
-        
-apply plugin: 'net.minecraftforge.gradle'
-apply plugin: 'eclipse'
-apply plugin: 'maven-publish'
-
-def requiredProp = { String key ->
-    def value = project.findProperty(key)
-    if (value == null) {
-        throw new GradleException("gradle.properties need '${key}'")
-    }
-    return value.toString()
+plugins {
+    id 'java'
+    id 'com.gtnewhorizons.retrofuturagradle' version '2.0.3'
 }
 
-def modId        = requiredProp('mod_id')
-def modName      = requiredProp('mod_name')
-def modVersion   = requiredProp('mod_version')
-def modGroup     = requiredProp('mod_group')
-def mcVersion    = requiredProp('mc_version')
-def forgeVersion = requiredProp('forge_version')
+version = project.mod_version
+group = project.mod_group
+base.archivesName.set(project.mod_id)
 
-version = modVersion
-group = modGroup
-archivesBaseName = modId
+java {
+    toolchain.languageVersion.set(JavaLanguageVersion.of(8))
+}
 
-sourceCompatibility = targetCompatibility = compileJava.sourceCompatibility = compileJava.targetCompatibility = '1.8'
-
-tasks.withType(JavaCompile) {
+tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
 }
 
-def generatedModMetaDir = file("$buildDir/generated/source/modmeta/java")
-
-task generateModMeta {
-    group = 'build'
-    description = 'Generate ModMeta.java based on gradle.properties'
-
-    def outDir = generatedModMetaDir
-    def pkg = modGroup
-    def id = modId
-    def name = modName
-    def ver = modVersion
-
-    inputs.property 'mod_group', pkg
-    inputs.property 'mod_id', id
-    inputs.property 'mod_name', name
-    inputs.property 'mod_version', ver
-    outputs.dir outDir
-
-    doLast {
-        def target = new File(outDir, (pkg.replace('.', '/') + '/ModMeta.java'))
-        target.parentFile.mkdirs()
-        def content = """
-package ${pkg};
-
-public final class ModMeta
-{
-    public static final String MOD_ID = "${id}";
-    public static final String NAME = "${name}";
-    public static final String VERSION = "${ver}";
-
-    private ModMeta()
-    {
-    }
+def mixinConfig = project.mixin_config
+def mixinRefmap = new groovy.json.JsonSlurper()
+        .parse(file("src/main/resources/${mixinConfig}")).refmap
+if (!(mixinRefmap instanceof String) || mixinRefmap.trim().isEmpty()) {
+    throw new GradleException("${mixinConfig} must declare a non-empty refmap")
 }
-"""
-
-        target.setText(content, 'UTF-8')
-    }
-}
-
-sourceSets.main.java.srcDir generatedModMetaDir
-compileJava.dependsOn generateModMeta
 
 minecraft {
-    mappings channel: 'snapshot', version: '20171003-1.12'
-    runs {
-        client {
-            workingDirectory project.file('run')
-            property 'forge.logging.markers', 'SCAN,REGISTRIES,REGISTRYDUMP'
-            property 'forge.logging.console.level', 'debug'
-        }
+    mcVersion.set(project.mc_version)
+    mcpMappingChannel.set(project.mapping_channel)
+    mcpMappingVersion.set(project.mapping_version)
+    extraRunJvmArguments.add('-Dfml.coreMods.load=zone.rong.mixinbooter.MixinBooterPlugin')
+    injectedTags.putAll([
+        MOD_ID: project.mod_id,
+        NAME: project.mod_name,
+        VERSION: project.mod_version
+    ])
+}
 
-        server {
+tasks.named('injectTags') {
+    outputClassName.set("${project.mod_group}.ModMeta")
+}
 
-            property 'forge.logging.markers', 'SCAN,REGISTRIES,REGISTRYDUMP'
-
-            property 'forge.logging.console.level', 'debug'
-        }
-    }
+repositories {
+    maven { url = 'https://maven.cleanroommc.com' }
 }
 
 dependencies {
-    minecraft "net.minecraftforge:forge:${forgeVersion}"
+    def mixin = modUtils.enableMixins("zone.rong:mixinbooter:${project.mixinbooter_version}", mixinRefmap)
+    implementation(mixin) { transitive = false }
+    annotationProcessor mixin
 }
 
-processResources {
-
+tasks.named('processResources') {
     filteringCharset = 'UTF-8'
-
-    inputs.property 'modid', modId
-    inputs.property 'modname', modName
-    inputs.property 'version', modVersion
-    inputs.property 'mcversion', mcVersion
-
-    from(sourceSets.main.resources.srcDirs) {
-        include 'mcmod.info'
-        expand 'modid': modId, 'modname': modName,
-               'version': modVersion, 'mcversion': mcVersion
-    }
-    from(sourceSets.main.resources.srcDirs) {
-        exclude 'mcmod.info'
+    def properties = [modid: project.mod_id, modname: project.mod_name,
+                      version: project.mod_version, mcversion: project.mc_version]
+    inputs.properties(properties)
+    filesMatching('mcmod.info') {
+        expand(properties)
     }
 }
 
-jar {
-    manifest {
-        attributes([
-            "Specification-Title": modName,
-            "Specification-Vendor": "mpp",
-            "Specification-Version": "1",
-            "Implementation-Title": project.name,
-            "Implementation-Version": modVersion,
-            "Implementation-Vendor" :"mpp",
-            "Implementation-Timestamp": new Date().format("yyyy-MM-dd'T'HH:mm:ssZ")
-        ])
-    }
-}
-
-jar.finalizedBy('reobfJar')
-publishing {
-    publications {
-        mavenJava(MavenPublication) {
-            artifact jar
-        }
-    }
-    repositories {
-        maven {
-            url "file:///${project.projectDir}/mcmodsrepo"
-        }
-    }
+tasks.named('jar') {
+    manifest.attributes('MixinConfigs': mixinConfig)
 }
